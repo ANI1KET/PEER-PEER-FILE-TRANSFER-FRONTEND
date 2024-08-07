@@ -20,7 +20,7 @@ const MeetingContent = () => {
     if (!username) {
       return;
     }
-    router.push(`/stream?username=${username}&meetingId=${meetingId}`);
+    router.push(`/filesharing?username=${username}&meetingId=${meetingId}`);
   };
   return (
     <div className="flex justify-center items-center min-h-screen">
