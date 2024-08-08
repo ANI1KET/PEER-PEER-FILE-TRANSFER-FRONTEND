@@ -1,11 +1,11 @@
 "use client";
 
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import SocketIO, { disconnectSocket, socketIo } from "@/app/utils/socketIo";
 import { ConnectedUser, UserMessage } from "@/app/utils/types";
 
-const StreamContent = () => {
+const File = () => {
   const router = useRouter();
   const searchParams = useSearchParams();
   const userName = searchParams.get("username");
@@ -376,4 +376,10 @@ const StreamContent = () => {
   );
 };
 
-export default StreamContent;
+const FileSharing = () => (
+  <Suspense fallback={<div>Loading...</div>}>
+    <File />
+  </Suspense>
+);
+
+export default FileSharing;
