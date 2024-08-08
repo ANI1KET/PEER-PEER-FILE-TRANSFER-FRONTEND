@@ -19,18 +19,21 @@ const StreamContent = () => {
   const RtcPeerConnection = useRef<{ [key: string]: RTCPeerConnection | null }>(
     {}
   );
+  const dataChannels = useRef<{ [key: string]: RTCDataChannel | null }>({});
+
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const remoteData = useRef<RTCDataChannel | null>(null);
-  const fileBuffer = useRef<Uint8Array[]>([]);
-  const fileSize = useRef<number>(0);
-  const receivedSize = useRef<number>(0);
-  const fileName = useRef<string[]>([]);
-  const mimeType = useRef<string>("application/octet-stream");
+  const fileBuffers = useRef<{ [key: string]: Uint8Array[] }>({});
+  const fileSizes = useRef<{ [key: string]: number }>({});
+  const receivedSizes = useRef<{ [key: string]: number }>({});
+  const fileNames = useRef<{ [key: string]: string[] }>({});
+  const mimeTypes = useRef<{ [key: string]: string }>({});
 
-  const [completeFiles, setCompleteFiles] = useState<Blob[]>([]);
+  const [completeFiles, setCompleteFiles] = useState<{ [key: string]: Blob[] }>(
+    {}
+  );
 
-  const fileQueue = useRef<File[]>([]);
-  const isProcessingFile = useRef<boolean>(false);
+  const sendingFileQueue = useRef<File[]>([]);
+  const isSendingFile = useRef<boolean>(false);
 
   useEffect(() => {
     const createConnection = async (socketId: string) => {
@@ -64,14 +67,20 @@ const StreamContent = () => {
         }
       };
 
-      remoteData.current = rtcPeerConnection.createDataChannel("myDataChannel");
-      remoteData.current.onopen = () => console.log("Data channel is open");
-      remoteData.current.onclose = () => console.log("Data channel is closed");
-      // remoteData.current.onmessage = (event) =>
-      //   handleIncomingMessage(event.data);
+      const dataChannel = rtcPeerConnection.createDataChannel("fileTransfer");
+      dataChannel.onopen = () =>
+        console.log(`Data channel open with ${socketId}`);
+      dataChannel.onclose = () =>
+        console.log(`Data channel closed with ${socketId}`);
+      dataChannel.onmessage = (event) =>
+        handleIncomingMessage(event.data, socketId);
+
+      dataChannels.current[socketId] = dataChannel;
+
       rtcPeerConnection.ondatachannel = (event) => {
         const remoteChannel = event.channel;
-        remoteChannel.onmessage = (event) => handleIncomingMessage(event.data);
+        remoteChannel.onmessage = (event) =>
+          handleIncomingMessage(event.data, socketId);
       };
 
       RtcPeerConnection.current[socketId] = rtcPeerConnection;
@@ -133,6 +142,8 @@ const StreamContent = () => {
     socketIo?.on("Notify_User_Disconnect", (socketId: string) => {
       RtcPeerConnection.current[socketId]?.close();
       RtcPeerConnection.current[socketId] = null;
+      dataChannels.current[socketId]?.close();
+      dataChannels.current[socketId] = null;
       setRemoteUsers((prevUsers) =>
         prevUsers.filter((user) => user.socketId !== socketId)
       );
@@ -144,207 +155,188 @@ const StreamContent = () => {
       socketIo?.off("Notify_User");
       socketIo?.off("Connected_User");
       socketIo?.off("Notify_User_Disconnect");
+      disconnectSocket();
     };
-  }, [meetingId, remoteUsers, userName]);
+  }, [meetingId, userName]);
 
   useEffect(() => {
     return () => {
       disconnectSocket();
-
       if (fileInputRef.current) {
         fileInputRef.current.value = "";
       }
-      remoteData.current = null;
-      fileBuffer.current = [];
-      fileSize.current = 0;
-      receivedSize.current = 0;
-      fileName.current = [];
-      mimeType.current = "application/octet-stream";
-      isProcessingFile.current = false;
-      fileQueue.current = [];
+      dataChannels.current = {};
+      fileBuffers.current = {};
+      fileSizes.current = {};
+      receivedSizes.current = {};
+      fileNames.current = {};
+      mimeTypes.current = {};
+      isSendingFile.current = false;
+      sendingFileQueue.current = [];
     };
   }, []);
 
   const processNextFileInQueue = () => {
-    if (fileQueue.current.length > 0 && !isProcessingFile.current) {
-      const file = fileQueue.current.shift();
+    if (sendingFileQueue.current.length > 0 && !isSendingFile.current) {
+      const file = sendingFileQueue.current.shift();
       if (file) {
         sendFile(file);
       }
     }
   };
 
-  //
-  // const sendFile = () => {
-  //   const file = fileInputRef.current?.files?.[0];
-  //   if (file && remoteData.current) {
-  //     const reader = new FileReader();
-  //     const CHUNK_SIZE = 16384;
-  //     let offset = 0;
-
-  //     remoteData.current.send(
-  //       JSON.stringify({
-  //         type: "metadata",
-  //         name: file.name,
-  //         mimeType: file.type,
-  //         size: file.size,
-  //       })
-  //     );
-
-  //     reader.onload = () => {
-  //       if (reader.result instanceof ArrayBuffer) {
-  //         const arrayBuffer = reader.result;
-  //         while (offset < arrayBuffer.byteLength) {
-  //           const chunk = arrayBuffer.slice(offset, offset + CHUNK_SIZE);
-  //           remoteData.current?.send(chunk);
-  //           offset += CHUNK_SIZE;
-  //         }
-  //       } else {
-  //         console.error("FileReader result is not an ArrayBuffer");
-  //       }
-  //     };
-
-  //     reader.onerror = (error) => console.error("Error reading file:", error);
-  //     reader.readAsArrayBuffer(file);
-  //   }
-  // };
-  //
-
-  const sendFile = (file: File) => {
-    if (remoteData.current) {
-      const reader = new FileReader();
-      const CHUNK_SIZE = 16384;
-      let offset = 0;
-      let isReading = false;
-
-      isProcessingFile.current = true;
-
-      remoteData.current.send(
-        JSON.stringify({
-          type: "metadata",
-          name: file.name,
-          mimeType: file.type,
-          size: file.size,
-        })
-      );
-
-      const readNextChunk = () => {
-        if (offset < file.size && !isReading) {
-          const chunk = file.slice(offset, offset + CHUNK_SIZE);
-          reader.readAsArrayBuffer(chunk);
-          isReading = true;
-        }
-      };
-
-      reader.onload = () => {
-        if (reader.result instanceof ArrayBuffer) {
-          const arrayBuffer = reader.result;
-
-          const sendData = () => {
-            if (remoteData.current) {
-              try {
-                remoteData.current.send(arrayBuffer);
-                offset += CHUNK_SIZE;
-                isReading = false;
-                readNextChunk();
-              } catch (error) {
-                if (
-                  error instanceof DOMException &&
-                  error.name === "OperationError"
-                ) {
-                  setTimeout(sendData, 100);
-                } else {
-                  console.error("Error sending data:", error);
-                  isReading = false;
-                }
-              }
-            }
-          };
-
-          sendData();
-        } else {
-          console.error("FileReader result is not an ArrayBuffer");
-        }
-      };
-
-      reader.onerror = (error) => {
-        console.error("Error reading file:", error);
-        isReading = false;
-      };
-
-      remoteData.current.onbufferedamountlow = () => {
-        if (remoteData.current?.bufferedAmount === 0 && !isReading) {
-          readNextChunk();
-        }
-      };
-
-      reader.onloadend = () => {
-        if (offset >= file.size) {
-          isProcessingFile.current = false;
-          processNextFileInQueue();
-        }
-      };
-
-      readNextChunk();
-    }
-  };
-
   const handleFileUpload = () => {
     const file = fileInputRef.current?.files?.[0];
     if (file) {
-      fileQueue.current.push(file);
+      sendingFileQueue.current.push(file);
       processNextFileInQueue();
     }
+    if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
-  const handleIncomingMessage = (data: any) => {
+  const sendFile = (file: File) => {
+    Object.values(dataChannels.current).forEach((dataChannel) => {
+      if (dataChannel) {
+        const reader = new FileReader();
+        const CHUNK_SIZE = 16384;
+        let offset = 0;
+        let isReading = false;
+
+        isSendingFile.current = true;
+
+        dataChannel.send(
+          JSON.stringify({
+            type: "metadata",
+            name: file.name,
+            mimeType: file.type,
+            size: file.size,
+          })
+        );
+
+        const readNextChunk = () => {
+          if (offset < file.size && !isReading) {
+            const chunk = file.slice(offset, offset + CHUNK_SIZE);
+            reader.readAsArrayBuffer(chunk);
+            isReading = true;
+          }
+        };
+
+        reader.onload = () => {
+          if (reader.result instanceof ArrayBuffer) {
+            const arrayBuffer = reader.result;
+
+            const sendData = () => {
+              if (dataChannel) {
+                try {
+                  dataChannel.send(arrayBuffer);
+                  offset += CHUNK_SIZE;
+                  isReading = false;
+                  readNextChunk();
+                } catch (error) {
+                  if (
+                    error instanceof DOMException &&
+                    error.name === "OperationError"
+                  ) {
+                    setTimeout(sendData, 100);
+                  } else {
+                    console.error("Error sending data:", error);
+                    isReading = false;
+                  }
+                }
+              }
+            };
+
+            sendData();
+          } else {
+            console.error("FileReader result is not an ArrayBuffer");
+          }
+        };
+
+        reader.onerror = (error) => {
+          console.error("Error reading file:", error);
+          isReading = false;
+        };
+
+        dataChannel.onbufferedamountlow = () => {
+          if (dataChannel.bufferedAmount === 0 && !isReading) {
+            readNextChunk();
+          }
+        };
+
+        reader.onloadend = () => {
+          if (offset >= file.size) {
+            isSendingFile.current = false;
+            processNextFileInQueue();
+          }
+        };
+
+        readNextChunk();
+      }
+    });
+  };
+
+  const handleIncomingMessage = (data: any, socketId: string) => {
     if (typeof data === "string") {
       const metadata = JSON.parse(data);
       if (metadata.type === "metadata") {
-        fileName.current.push(metadata.name);
-        mimeType.current = metadata.mimeType;
-        fileSize.current = metadata.size;
-        receivedSize.current = 0;
-        fileBuffer.current = [];
+        if (!fileNames.current[socketId]) {
+          fileNames.current[socketId] = [];
+        }
+        fileNames.current[socketId].push(metadata.name);
+        mimeTypes.current[socketId] = metadata.mimeType;
+        fileSizes.current[socketId] = metadata.size;
+        receivedSizes.current[socketId] = 0;
+        fileBuffers.current[socketId] = [];
       }
     } else if (data instanceof ArrayBuffer) {
       const chunk = new Uint8Array(data);
-      fileBuffer.current.push(chunk);
-      receivedSize.current += chunk.byteLength;
+      if (!fileBuffers.current[socketId]) {
+        console.error("No buffer found for socketId:", socketId);
+        return;
+      }
+      fileBuffers.current[socketId].push(chunk);
+      receivedSizes.current[socketId] += chunk.byteLength;
 
-      if (receivedSize.current >= fileSize.current) {
-        const MimeType = mimeType.current;
-        const FileBuffer = fileBuffer.current;
-        setCompleteFiles((prev) => [
+      if (receivedSizes.current[socketId] >= fileSizes.current[socketId]) {
+        const MimeType = mimeTypes.current[socketId];
+        const FileBuffer = fileBuffers.current[socketId];
+        setCompleteFiles((prev) => ({
           ...prev,
-          new Blob(FileBuffer, { type: MimeType }),
-        ]);
+          [socketId]: [
+            ...(prev[socketId] || []),
+            new Blob(FileBuffer, { type: MimeType }),
+          ],
+        }));
 
-        mimeType.current = "application/octet-stream";
-        fileSize.current = 0;
-        receivedSize.current = 0;
-        fileBuffer.current = [];
+        mimeTypes.current[socketId] = "application/octet-stream";
+        fileSizes.current[socketId] = 0;
+        receivedSizes.current[socketId] = 0;
+        fileBuffers.current[socketId] = [];
       }
     } else {
       console.error("Received data is not in the expected format");
     }
   };
 
-  const triggerDownload = (file: Blob, index: number) => {
+  const triggerDownload = (file: Blob, index: number, socketId: string) => {
     if (file) {
       const url = URL.createObjectURL(file);
       const a = document.createElement("a");
       a.href = url;
-      a.download = fileName.current[index];
+      a.download = fileNames.current[socketId][index] || "unknown";
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
 
-      fileName.current.splice(index, 1);
-      setCompleteFiles((prevFiles) => {
-        return prevFiles.filter((_, i) => i !== index);
-      });
+      setCompleteFiles((prevFiles) => ({
+        ...prevFiles,
+        [socketId]: prevFiles[socketId].filter((_, i) => i !== index),
+      }));
+
+      fileNames.current[socketId] = fileNames.current[socketId].filter(
+        (_, i) => i !== index
+      );
     }
   };
 
@@ -365,15 +357,19 @@ const StreamContent = () => {
           >
             Send File
           </button>
-          {completeFiles.map((file, index) => (
-            <button
-              key={index}
-              onClick={() => triggerDownload(file, index)}
-              className="px-4 py-2 bg-green-600 text-white rounded-lg shadow-md hover:bg-green-700 transition duration-300 ease-in-out focus:outline-none focus:ring-2 focus:ring-green-500"
-            >
-              {fileName.current[index]}
-            </button>
-          ))}
+          {Object.entries(completeFiles).map(([socketId, files]) =>
+            files.map((file, index) => {
+              return (
+                <button
+                  key={`${socketId}-${index}`}
+                  onClick={() => triggerDownload(file, index, socketId)}
+                  className="px-4 py-2 bg-green-600 text-white rounded-lg shadow-md hover:bg-green-700 transition duration-300 ease-in-out focus:outline-none focus:ring-2 focus:ring-green-500"
+                >
+                  {fileNames.current[socketId][index] || "Unknown File"}
+                </button>
+              );
+            })
+          )}
         </div>
       </div>
     </div>
