@@ -40,23 +40,23 @@ const File = () => {
       const rtcPeerConnection = new RTCPeerConnection({
         iceServers: [
           { urls: "stun:stun.l.google.com:19302" },
-          { urls: "stun:stun.l.google.com:5349" },
-          { urls: "stun:stun1.l.google.com:3478" },
-          {
-            urls: "turn:192.158.29.39:3478?transport=tcp",
-            credential: "JZEOEt2V3Qb0y27GRntt2u2PAYA=",
-            username: "28224511:1379330808",
-          },
-          {
-            urls: "turn:192.158.29.39:3478?transport=udp",
-            credential: "JZEOEt2V3Qb0y27GRntt2u2PAYA=",
-            username: "28224511:1379330808",
-          },
-          {
-            urls: "turn:turn.bistri.com:80",
-            credential: "homeo",
-            username: "homeo",
-          },
+          // { urls: "stun:stun.l.google.com:5349" },
+          // { urls: "stun:stun1.l.google.com:3478" },
+          // {
+          //   urls: "turn:192.158.29.39:3478?transport=tcp",
+          //   credential: "JZEOEt2V3Qb0y27GRntt2u2PAYA=",
+          //   username: "28224511:1379330808",
+          // },
+          // {
+          //   urls: "turn:192.158.29.39:3478?transport=udp",
+          //   credential: "JZEOEt2V3Qb0y27GRntt2u2PAYA=",
+          //   username: "28224511:1379330808",
+          // },
+          // {
+          //   urls: "turn:turn.bistri.com:80",
+          //   credential: "homeo",
+          //   username: "homeo",
+          // },
         ],
       });
 
@@ -83,12 +83,16 @@ const File = () => {
       };
 
       const dataChannel = rtcPeerConnection.createDataChannel("fileTransfer");
+      // const dataChannel = rtcPeerConnection.createDataChannel("fileTransfer",{
+      //   ordered: true,
+      //   reliable: true
+      // });
       dataChannel.onopen = () =>
         console.log(`Data channel open with ${socketId}`);
       dataChannel.onclose = () =>
         console.log(`Data channel closed with ${socketId}`);
-      dataChannel.onmessage = (event) =>
-        handleIncomingMessage(event.data, socketId);
+      // dataChannel.onmessage = (event) =>
+      //   handleIncomingMessage(event.data, socketId);
 
       dataChannels.current[socketId] = dataChannel;
 
