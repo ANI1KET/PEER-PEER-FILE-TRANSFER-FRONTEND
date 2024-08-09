@@ -245,6 +245,7 @@ const File = () => {
             const arrayBuffer = reader.result;
 
             const sendData = () => {
+              console.log("Sending...");
               if (dataChannel) {
                 try {
                   dataChannel.send(arrayBuffer);
@@ -284,6 +285,7 @@ const File = () => {
 
         reader.onloadend = () => {
           if (offset >= file.size) {
+            console.log("Sent");
             isSendingFile.current = false;
             processNextFileInQueue();
           }
@@ -295,6 +297,7 @@ const File = () => {
   };
 
   const handleIncomingMessage = (data: any, socketId: string) => {
+    console.log("Receivinging...");
     if (typeof data === "string") {
       const metadata = JSON.parse(data);
       if (metadata.type === "metadata") {
@@ -331,6 +334,8 @@ const File = () => {
         fileSizes.current[socketId] = 0;
         receivedSizes.current[socketId] = 0;
         fileBuffers.current[socketId] = [];
+
+        console.log("Received...");
       }
     } else {
       console.error("Received data is not in the expected format");
