@@ -35,28 +35,30 @@ const File = () => {
   const sendingFileQueue = useRef<File[]>([]);
   const isSendingFile = useRef<boolean>(false);
 
+  const fileReceiverWorker = useRef<{ [key: string]: Worker }>({});
+
   useEffect(() => {
     const createConnection = async (socketId: string) => {
       const rtcPeerConnection = new RTCPeerConnection({
         iceServers: [
           { urls: "stun:stun.l.google.com:19302" },
           { urls: "stun:stun.l.google.com:5349" },
-          // { urls: "stun:stun1.l.google.com:3478" },
-          // {
-          //   urls: "turn:192.158.29.39:3478?transport=tcp",
-          //   credential: "JZEOEt2V3Qb0y27GRntt2u2PAYA=",
-          //   username: "28224511:1379330808",
-          // },
-          // {
-          //   urls: "turn:192.158.29.39:3478?transport=udp",
-          //   credential: "JZEOEt2V3Qb0y27GRntt2u2PAYA=",
-          //   username: "28224511:1379330808",
-          // },
-          // {
-          //   urls: "turn:turn.bistri.com:80",
-          //   credential: "homeo",
-          //   username: "homeo",
-          // },
+          { urls: "stun:stun1.l.google.com:3478" },
+          {
+            urls: "turn:192.158.29.39:3478?transport=tcp",
+            credential: "JZEOEt2V3Qb0y27GRntt2u2PAYA=",
+            username: "28224511:1379330808",
+          },
+          {
+            urls: "turn:192.158.29.39:3478?transport=udp",
+            credential: "JZEOEt2V3Qb0y27GRntt2u2PAYA=",
+            username: "28224511:1379330808",
+          },
+          {
+            urls: "turn:turn.bistri.com:80",
+            credential: "homeo",
+            username: "homeo",
+          },
         ],
       });
 
@@ -98,8 +100,14 @@ const File = () => {
 
       rtcPeerConnection.ondatachannel = (event) => {
         const remoteChannel = event.channel;
-        remoteChannel.onmessage = (event) =>
+        remoteChannel.onmessage = (event) => {
+          if (!fileReceiverWorker.current[socketId]) {
+            fileReceiverWorker.current[socketId] = new Worker(
+              new URL("@/app/webworker/fileReceiverWorker.ts", import.meta.url)
+            );
+          }
           handleIncomingMessage(event.data, socketId);
+        };
       };
 
       RtcPeerConnection.current[socketId] = rtcPeerConnection;
@@ -214,90 +222,91 @@ const File = () => {
   };
 
   const sendFile = (file: File) => {
+    isSendingFile.current = true;
+
+    const fileSenderWorker = new Worker(
+      new URL("@/app/webworker/fileSenderWorker.ts", import.meta.url)
+    );
+
     Object.values(dataChannels.current).forEach((dataChannel) => {
       if (dataChannel) {
-        const reader = new FileReader();
-        const CHUNK_SIZE = 16384;
-        let offset = 0;
-        let isReading = false;
+        try {
+          dataChannel.send(
+            JSON.stringify({
+              type: "metadata",
+              name: file.name,
+              mimeType: file.type,
+              size: file.size,
+            })
+          );
 
-        isSendingFile.current = true;
-
-        dataChannel.send(
-          JSON.stringify({
-            type: "metadata",
-            name: file.name,
-            mimeType: file.type,
-            size: file.size,
-          })
-        );
-
-        const readNextChunk = () => {
-          if (offset < file.size && !isReading) {
-            const chunk = file.slice(offset, offset + CHUNK_SIZE);
-            reader.readAsArrayBuffer(chunk);
-            isReading = true;
-          }
-        };
-
-        reader.onload = () => {
-          if (reader.result instanceof ArrayBuffer) {
-            const arrayBuffer = reader.result;
-
-            const sendData = () => {
-              console.log("Sending...");
-              if (dataChannel) {
-                try {
-                  dataChannel.send(arrayBuffer);
-                  offset += CHUNK_SIZE;
-                  isReading = false;
-                  readNextChunk();
-                } catch (error) {
-                  if (
-                    error instanceof DOMException &&
-                    error.name === "OperationError"
-                  ) {
-                    setTimeout(sendData, 100);
-                  } else {
-                    console.error("Error sending data:", error);
-                    isReading = false;
-                  }
-                }
-              }
-            };
-
-            sendData();
-          } else {
-            console.error("FileReader result is not an ArrayBuffer");
-          }
-        };
-
-        reader.onerror = (error) => {
-          console.error("Error reading file:", error);
-          isReading = false;
-        };
-
-        dataChannel.onbufferedamountlow = () => {
-          if (dataChannel.bufferedAmount === 0 && !isReading) {
-            readNextChunk();
-          }
-        };
-
-        reader.onloadend = () => {
-          if (offset >= file.size) {
-            console.log("Sent");
-            isSendingFile.current = false;
-            processNextFileInQueue();
-          }
-        };
-
-        readNextChunk();
+          dataChannel.onbufferedamountlow = () => {
+            if (dataChannel.bufferedAmount === 0) {
+              fileSenderWorker.postMessage({ type: "read-next-chunk" });
+            }
+          };
+        } catch (metadataError) {
+          console.error("Error sending metadata : ", metadataError);
+          isSendingFile.current = false;
+          fileSenderWorker.terminate();
+          return;
+        }
       }
     });
+
+    fileSenderWorker.postMessage({ file });
+
+    fileSenderWorker.onmessage = (e: MessageEvent) => {
+      const { type, chunk, done, error } = e.data;
+
+      switch (type) {
+        case "chunk":
+          Object.values(dataChannels.current).forEach((dataChannel) => {
+            if (dataChannel) {
+              try {
+                dataChannel.send(chunk);
+
+                dataChannel.onbufferedamountlow = () => {
+                  if (dataChannel.bufferedAmount === 0) {
+                    fileSenderWorker.postMessage({ type: "read-next-chunk" });
+                  }
+                };
+              } catch (error) {
+                if (
+                  error instanceof DOMException &&
+                  error.name === "OperationError"
+                ) {
+                  setTimeout(() => {
+                    fileSenderWorker.postMessage({ type: "read-next-chunk" });
+                  }, 100);
+                } else {
+                  console.error("Error sending data:", error);
+                  isSendingFile.current = false;
+                  fileSenderWorker.terminate();
+                  return;
+                }
+              }
+            }
+          });
+          console.log(`Sending: ${done}%`);
+          break;
+
+        case "complete":
+          isSendingFile.current = false;
+          processNextFileInQueue();
+          fileSenderWorker.terminate();
+          break;
+
+        case "fileError":
+          console.error("Error:", error);
+          isSendingFile.current = false;
+          fileSenderWorker.terminate();
+          break;
+      }
+    };
   };
 
   const handleIncomingMessage = (data: any, socketId: string) => {
-    console.log("Receivinging...");
     if (typeof data === "string") {
       const metadata = JSON.parse(data);
       if (metadata.type === "metadata") {
@@ -305,41 +314,42 @@ const File = () => {
           fileNames.current[socketId] = [];
         }
         fileNames.current[socketId].push(metadata.name);
-        mimeTypes.current[socketId] = metadata.mimeType;
-        fileSizes.current[socketId] = metadata.size;
-        receivedSizes.current[socketId] = 0;
-        fileBuffers.current[socketId] = [];
+
+        fileReceiverWorker.current[socketId].postMessage({
+          type: "metadata",
+          data: metadata,
+          socketId,
+        });
       }
     } else if (data instanceof ArrayBuffer) {
-      const chunk = new Uint8Array(data);
-      if (!fileBuffers.current[socketId]) {
-        console.error("No buffer found for socketId:", socketId);
-        return;
-      }
-      fileBuffers.current[socketId].push(chunk);
-      receivedSizes.current[socketId] += chunk.byteLength;
-
-      if (receivedSizes.current[socketId] >= fileSizes.current[socketId]) {
-        const MimeType = mimeTypes.current[socketId];
-        const FileBuffer = fileBuffers.current[socketId];
-        setCompleteFiles((prev) => ({
-          ...prev,
-          [socketId]: [
-            ...(prev[socketId] || []),
-            new Blob(FileBuffer, { type: MimeType }),
-          ],
-        }));
-
-        mimeTypes.current[socketId] = "application/octet-stream";
-        fileSizes.current[socketId] = 0;
-        receivedSizes.current[socketId] = 0;
-        fileBuffers.current[socketId] = [];
-
-        console.log("Received...");
-      }
+      fileReceiverWorker.current[socketId].postMessage({
+        type: "chunk",
+        data,
+        socketId,
+      });
     } else {
       console.error("Received data is not in the expected format");
     }
+
+    fileReceiverWorker.current[socketId].onmessage = (e: MessageEvent) => {
+      const { type, blob, received } = e.data;
+
+      switch (type) {
+        case "receiving":
+          console.log("Receiving : ", received);
+          break;
+
+        case "fileComplete":
+          setCompleteFiles((prev) => ({
+            ...prev,
+            [socketId]: [...(prev[socketId] || []), blob],
+          }));
+          break;
+
+        default:
+          console.error("Received data is not in the expected format");
+      }
+    };
   };
 
   const triggerDownload = (file: Blob, index: number, socketId: string) => {
