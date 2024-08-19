@@ -328,6 +328,7 @@ const File = () => {
         socketId,
       });
     } else {
+      fileReceiverWorker.current[socketId].terminate();
       console.error("Received data is not in the expected format");
     }
 
@@ -344,9 +345,11 @@ const File = () => {
             ...prev,
             [socketId]: [...(prev[socketId] || []), blob],
           }));
+          fileReceiverWorker.current[socketId].terminate();
           break;
 
         default:
+          fileReceiverWorker.current[socketId].terminate();
           console.error("Received data is not in the expected format");
       }
     };
