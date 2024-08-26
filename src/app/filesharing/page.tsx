@@ -31,11 +31,13 @@ const File = () => {
   const [completeFiles, setCompleteFiles] = useState<{ [key: string]: Blob[] }>(
     {}
   );
+  const [sendingprogress, setSendingProgress] = useState<string>("");
+  const [receivingprogress, setReceivingProgress] = useState<string>("");
 
   const sendingFileQueue = useRef<File[]>([]);
   const isSendingFile = useRef<boolean>(false);
 
-  const fileReceiverWorker = useRef<{ [key: string]: Worker }>({});
+  const fileReceiverWorker = useRef<{ [key: string]: Worker | null }>({});
 
   useEffect(() => {
     const createConnection = async (socketId: string) => {
@@ -171,6 +173,9 @@ const File = () => {
       RtcPeerConnection.current[socketId] = null;
       dataChannels.current[socketId]?.close();
       dataChannels.current[socketId] = null;
+
+      delete fileReceiverWorker.current[socketId];
+
       setRemoteUsers((prevUsers) =>
         prevUsers.filter((user) => user.socketId !== socketId)
       );
@@ -189,17 +194,32 @@ const File = () => {
   useEffect(() => {
     return () => {
       disconnectSocket();
+
+      // Clear the file input
       if (fileInputRef.current) {
         fileInputRef.current.value = "";
       }
+
+      // Reset refs to their initial empty state
       dataChannels.current = {};
       fileBuffers.current = {};
       fileSizes.current = {};
       receivedSizes.current = {};
       fileNames.current = {};
       mimeTypes.current = {};
+
+      // Reset file sending state
       isSendingFile.current = false;
       sendingFileQueue.current = [];
+
+      // Terminate workers and reset fileReceiverWorker ref
+      Object.keys(fileReceiverWorker.current).forEach((key) => {
+        const worker = fileReceiverWorker.current[key];
+        if (worker) {
+          worker.terminate();
+        }
+      });
+      fileReceiverWorker.current = {};
     };
   }, []);
 
@@ -288,13 +308,15 @@ const File = () => {
               }
             }
           });
-          console.log(`Sending: ${done}%`);
+          console.log(done);
+          setSendingProgress(done);
           break;
 
         case "complete":
           isSendingFile.current = false;
           processNextFileInQueue();
           fileSenderWorker.terminate();
+          setSendingProgress(done);
           break;
 
         case "fileError":
@@ -315,29 +337,31 @@ const File = () => {
         }
         fileNames.current[socketId].push(metadata.name);
 
-        fileReceiverWorker.current[socketId].postMessage({
+        fileReceiverWorker.current[socketId]?.postMessage({
           type: "metadata",
           data: metadata,
           socketId,
         });
       }
     } else if (data instanceof ArrayBuffer) {
-      fileReceiverWorker.current[socketId].postMessage({
+      fileReceiverWorker.current[socketId]?.postMessage({
         type: "chunk",
         data,
         socketId,
       });
     } else {
-      fileReceiverWorker.current[socketId].terminate();
+      fileReceiverWorker.current[socketId]?.terminate();
       console.error("Received data is not in the expected format");
     }
 
-    fileReceiverWorker.current[socketId].onmessage = (e: MessageEvent) => {
+    (fileReceiverWorker.current[socketId] as Worker).onmessage = (
+      e: MessageEvent
+    ) => {
       const { type, blob, received } = e.data;
 
       switch (type) {
         case "receiving":
-          console.log("Receiving : ", received);
+          setReceivingProgress(received);
           break;
 
         case "fileComplete":
@@ -345,11 +369,14 @@ const File = () => {
             ...prev,
             [socketId]: [...(prev[socketId] || []), blob],
           }));
-          fileReceiverWorker.current[socketId].terminate();
+          // fileReceiverWorker.current[socketId]?.terminate();
+          // fileReceiverWorker.current[socketId] = null;
+          // delete fileReceiverWorker.current[socketId];
           break;
 
         default:
-          fileReceiverWorker.current[socketId].terminate();
+          fileReceiverWorker.current[socketId]?.terminate();
+          fileReceiverWorker.current[socketId] = null;
           console.error("Received data is not in the expected format");
       }
     };
@@ -409,6 +436,9 @@ const File = () => {
           )}
         </div>
       </div>
+      Sent : {sendingprogress}
+      <br />
+      Received : {receivingprogress}
     </div>
   );
 };

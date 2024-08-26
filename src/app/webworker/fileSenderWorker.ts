@@ -34,8 +34,10 @@ self.onmessage = async function (e) {
 
       reader.readAsArrayBuffer(chunk);
     } else {
+      const progress = Math.floor((offset / file.size) * 100);
       self.postMessage({
         type: "complete",
+        done: progress > 100 ? 100 : progress,
       });
     }
   };
